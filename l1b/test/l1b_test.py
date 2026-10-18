@@ -1,91 +1,152 @@
 from pathlib import Path
+import csv
+import matplotlib.pyplot as plt
 import numpy as np
 from netCDF4 import Dataset
-import matplotlib.pyplot as plt
 
 #Rutas
 output = Path(r"C:\Users\ALEJANDRA\Desktop\EODP_TER_2021\EODP-TS-L1B\output")
 myoutputs = Path(r"C:\Users\ALEJANDRA\Desktop\EODP_TER_2021\EODP-TS-L1B\myoutputs")
 myoutputs_noteq = Path(r"C:\Users\ALEJANDRA\Desktop\EODP_TER_2021\EODP-TS-L1B\myoutputs_noteq")
-input = Path(r"C:\Users\ALEJANDRA\Desktop\EODP_TER_2021\EODP-TS-L1B\input")
+input_dir = Path(r"C:\Users\ALEJANDRA\Desktop\EODP_TER_2021\EODP-TS-L1B\input")
+RESULTS = Path(r"C:\Users\ALEJANDRA\Desktop\EODP_TER_2021\EODP-TS-L1B\l1b_validation_figures")
 
-#Función para leer el valor de toa
+BANDS = [f"VNIR-{i}" for i in range(4)]
+ALT_PIXEL = 50       # Fila along-track representada
+MAX_REL_ERROR = 1e-3  # Porcentaje: 0,001 %
+ZERO_ATOL = 1e-8     # Error absoluto admitido si referencia = 0
 
-def read_toa(filename):
-    with Dataset(filename, "r") as ds:
-        return np.ma.filled(ds.variables["toa"][:], np.nan).astype(float)
-
-#CROSS VALIDATE L1B EQUALIZATED
-files_output = {f.name for f in output.glob("*.nc")}
-files_myoutputs = {f.name for f in myoutputs.glob("*.nc")}
-
-common_files = sorted(files_output & files_myoutputs)
-
-print(f"Archivos comunes: {len(common_files)}")
-
-for name in common_files: #Comparamos variable toa
-    toa_output = read_toa(output / name)
-    toa_myoutput = read_toa(myoutputs / name)
-
-    coincide = (
-        toa_output.shape == toa_myoutput.shape and np.allclose(
-            toa_output,
-            toa_myoutput,
-            rtol=1e-6,
-            atol=1e-8,
-            equal_nan=True
+#Lee la variable toa
+def load_toa(path):
+    with Dataset(path) as ds:
+        return np.asarray(
+            np.ma.filled(ds.variables["toa"][:], np.nan),
+            dtype=float
         )
+
+#Cross Validation
+def validate(filename):
+    reference = load_toa(output / filename)
+    generated = load_toa(myoutputs / filename)
+
+    #Comprobación de que los datos se puedan comparar
+    if reference.shape != generated.shape:
+        raise ValueError(f"Dimensiones distintas en {filename}")
+    if not (np.isfinite(reference).all() and np.isfinite(generated).all()):
+        raise ValueError(f"Hay valores NaN o infinitos en {filename}")
+
+    #Calcula la diferencia absoluta y relativa máximas
+    error = np.abs(generated - reference)
+    valid = reference != 0
+
+    max_abs = float(error.max())
+
+    max_rel = (
+        float((100 * error[valid] / np.abs(reference[valid])).max())
+        if valid.any() else np.nan
     )
 
-    print(f"{name}: {'COINCIDE' if coincide else 'NO COINCIDE'}")
+    #Umbral relativo y tolerancia
+    relative_ok = max_rel < MAX_REL_ERROR if valid.any() else True
+    zeros_ok = np.all(error[~valid] <= ZERO_ATOL)
 
-# PLOT FROM YOUR OUTPUTS THE EQUALISED OUTPUT VERSUS NOT EQUALISED VERSUS THE TRUTH
-# TRUTH = EODP-TS-L1B\input\ism_toa_isrf_VNIR-0.nc
+    status = "PASS" if relative_ok and zeros_ok else "FAIL"
 
-alt_pixel = 50
+    return [filename, max_abs, max_rel, status]
 
-truth_file = input / f"ism_toa_isrf_VNIR-0.nc"
-no_eq_file = myoutputs_noteq / f"l1b_toa_VNIR-0.nc"
-eq_file = myoutputs / f"l1b_toa_VNIR-0.nc"
+#Gráficas
+def plot_equalization(band):
+    filename = f"l1b_toa_{band}.nc"
 
-#leemos la variable toa de cada archivo
-truth = read_toa(truth_file)
-no_eq = read_toa(no_eq_file)
-eq = read_toa(eq_file)
+    curves = [
+        ("L1B with equalization", myoutputs / filename, "black"),
+        ("L1B without equalization", myoutputs_noteq / filename, "red"),
+        ("TOA after ISRF", input_dir / f"ism_toa_isrf_{band}.nc", "blue"),
+    ]
 
-#Gráfica
-act_pixel = np.arange(eq.shape[1])
-plt.figure(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(11, 6))
+    shape = None
 
-plt.plot(
-    act_pixel,
-    eq[alt_pixel, :],
-    color="black",
-    linewidth=1.5,
-    label="TOA L1B with eq"
-)
+    for label, path, color in curves:
+        data = load_toa(path)
 
-plt.plot(
-    act_pixel,
-    no_eq[alt_pixel, :],
-    color="red",
-    linewidth=1.5,
-    label="TOA L1B no eq"
-)
+        if data.ndim != 2 or (shape is not None and data.shape != shape):
+            raise ValueError(f"Dimensiones incompatibles en {path.name}")
 
-plt.plot(
-    act_pixel,
-    truth[alt_pixel, :],
-    color="blue",
-    linewidth=1.5,
-    label="TOA after the ISRF"
-)
+        shape = data.shape
 
-plt.title(f"Effect of the Equalization for VNIR-0")
-plt.xlabel("ACT pixel [-]")
-plt.ylabel("TOA [mW/m²/sr]")
+        if ALT_PIXEL >= shape[0]:
+            raise ValueError(f"ALT_PIXEL={ALT_PIXEL} fuera de rango")
 
-plt.grid(True, alpha=0.4)
-plt.legend()
-plt.tight_layout()
-plt.show()
+        ax.plot(
+            data[ALT_PIXEL, :],
+            label=label,
+            color=color,
+            linewidth=1.4
+        )
+
+    ax.set(
+        title=f"Effect of equalization — {band} (ALT pixel {ALT_PIXEL})",
+        xlabel="ACT pixel [-]",
+        ylabel="TOA [mW/m²/sr]"
+    )
+
+    ax.grid(alpha=0.35)
+    ax.legend()
+    fig.tight_layout()
+
+    fig.savefig(RESULTS / f"l1b_equalization_{band}.png", dpi=200)
+    plt.close(fig)
+
+
+def main():
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    filenames = [
+        f"{prefix}_{band}.nc"
+        for prefix in ("l1b_toa", "l1b_toa_eq")
+        for band in BANDS
+    ]
+
+    rows = [validate(filename) for filename in filenames]
+
+    #Resultados
+    print(
+        f"{'File':<24} "
+        f"{'Max abs difference':>21} "
+        f"{'Max rel difference (%)':>24} "
+        f"{'PASS/FAIL':>11}"
+    )
+    print("-" * 85)
+
+    for name, abs_err, rel_err, status in rows:
+        print(
+            f"{name:<24} "
+            f"{abs_err:>21.8e} "
+            f"{rel_err:>24.8e} "
+            f"{status:>11}"
+        )
+
+    #Tabla a CSV
+    with (RESULTS / "l1b_cross_validation.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as file:
+        writer = csv.writer(file)
+        writer.writerow([
+            "file",
+            "max_abs_diff",
+            "max_rel_diff_percent",
+            "status"
+        ])
+        writer.writerows(rows)
+
+    #Gráfica para cada banda
+    for band in BANDS:
+        plot_equalization(band)
+
+    overall = "PASS" if all(row[3] == "PASS" for row in rows) else "FAIL"
+    print(f"\nOVERALL RESULT: {overall}")
+    print(f"Results saved in: {RESULTS}")
+
+
+if __name__ == "__main__":
+    main()

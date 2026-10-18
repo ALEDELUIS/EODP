@@ -1,22 +1,12 @@
-# LEVEL-1C TEST
-# 1. Plot L1B grid (red) versus L1C grid (blue)
-# 2. Plot Spatial Sampling Distance for the central row of the L1B geometry
-
 from pathlib import Path
-
 import numpy as np
 import matplotlib.pyplot as plt
 from netCDF4 import Dataset
-from geopy.distance import great_circle
-
 from common.io.readGeodetic import readGeodetic
 from config.globalConfig import globalConfig
 
 
-# ============================================================
-# RUTAS - MISMA ESTRUCTURA QUE mainL1c.py
-# ============================================================
-
+#Rutas
 auxdir = r'C:\Users\ALEJANDRA\Documents\GitHub\EODP\auxiliary'
 
 indir = (
@@ -25,165 +15,103 @@ indir = (
 )
 
 outdir = r"C:\Users\ALEJANDRA\Desktop\EODP_TER_2021\EODP-TS-L1C\myoutput"
+RESULTS = Path(r"C:\Users\ALEJANDRA\Desktop\EODP_TER_2021\EODP-TS-L1C\l1c_report_figures")
 
-
-# Separar las dos carpetas de entrada
+#Separar las dos carpetas de entrada
 gmdir, l1bdir = indir.split(",")
 
-# Configuración global
+#Configuración global
 config = globalConfig()
 
-
-# ============================================================
-# LEER GEOMETRÍA L1B
-# ============================================================
-
-lat_l1b, lon_l1b = readGeodetic(
-    gmdir,
-    config.gm_geoloc
-)
+BAND = "VNIR-0"  # Grid geometry is represented using this L1C product.
+EARTH_RADIUS_M = 6_371_000.0  # Spherical Earth approximation.
 
 
-# ============================================================
-# LEER GEOMETRÍA L1C
-# ============================================================
-
-# Usamos VNIR-0 para representar la geometría L1C
-band = "VNIR-0"
-
-l1c_file = Path(outdir) / f"{config.l1c_toa}{band}.nc"
-
-
-def read_l1c(filename):
-    """
-    Lee latitud y longitud del producto L1C.
-    """
-
-    with Dataset(filename, "r") as ds:
-
-        print("Variables L1C:", list(ds.variables.keys()))
-
-        lat = ds.variables["lat"][:]
-        lon = ds.variables["lon"][:]
-
-    lat = np.ma.filled(lat, np.nan).astype(float)
-    lon = np.ma.filled(lon, np.nan).astype(float)
-
+def read_l1c_geometry(path):
+    with Dataset(path) as ds:
+        lat = np.ma.filled(ds.variables["lat"][:], np.nan).astype(float)
+        lon = np.ma.filled(ds.variables["lon"][:], np.nan).astype(float)
     return lat, lon
 
+def haversine(lat1, lon1, lat2, lon2):
+    phi1, phi2 = np.radians(lat1), np.radians(lat2)
+    dphi = phi2 - phi1
+    dlambda = np.radians(lon2 - lon1)
+    a = np.sin(dphi / 2) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2) ** 2
+    return 2 * EARTH_RADIUS_M * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
 
-lat_l1c, lon_l1c = read_l1c(l1c_file)
+def save_plot(filename):
+    plt.tight_layout()
+    plt.savefig(RESULTS / filename, dpi=200)
+    plt.close()
 
+def main():
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    cfg = globalConfig()
 
-# ============================================================
-# 1. L1B GRID VS L1C GRID
-# ============================================================
+    #L1B geometry comes from the GM geolocation file
+    lat_l1b, lon_l1b = readGeodetic(str(gmdir), cfg.gm_geoloc)
+    lat_l1b = np.ma.filled(np.ma.asarray(lat_l1b), np.nan).astype(float)
+    lon_l1b = np.ma.filled(np.ma.asarray(lon_l1b), np.nan).astype(float)
 
-plt.figure(figsize=(10, 7))
+    #L1C coordinates from one output band
+    l1c_file = Path(outdir) / f"{cfg.l1c_toa}{BAND}.nc"
+    lat_l1c, lon_l1c = read_l1c_geometry(l1c_file)
+    if lat_l1b.shape != lon_l1b.shape or lat_l1c.shape != lon_l1c.shape:
+        raise ValueError("Latitude and longitude arrays have incompatible shapes")
 
-# L1B grid
-plt.scatter(
-    lon_l1b.flatten(),
-    lat_l1b.flatten(),
-    s=4,
-    color="red",
-    label="L1B grid"
-)
+    #Figure 1
+    plt.figure(figsize=(10, 7))
+    plt.scatter(lon_l1b.ravel(), lat_l1b.ravel(), s=4, color="red", label="L1B grid")
+    plt.scatter(lon_l1c.ravel(), lat_l1c.ravel(), s=8, color="blue", label="L1C grid")
+    plt.title("L1B and L1C spatial grids")
+    plt.xlabel("Longitude [deg]")
+    plt.ylabel("Latitude [deg]")
+    plt.grid(alpha=0.3)
+    plt.legend()
+    save_plot("l1b_vs_l1c_grid.png")
 
-# L1C grid
-plt.scatter(
-    lon_l1c.flatten(),
-    lat_l1c.flatten(),
-    s=8,
-    color="blue",
-    label="L1C grid"
-)
+    #Consecutive ACT pixel pairs on the central ALT row of L1B
+    row = lat_l1b.shape[0] // 2
+    lat = lat_l1b[row, :]
+    lon = lon_l1b[row, :]
+    ssd = haversine(lat[:-1], lon[:-1], lat[1:], lon[1:])
+    lat_mid = (lat[:-1] + lat[1:]) / 2
+    valid = np.isfinite(ssd) & np.isfinite(lat_mid)
+    if not valid.any():
+        raise ValueError("No valid consecutive pixels in the central L1B row")
+    indices = np.arange(ssd.size)[valid]
+    values = ssd[valid]
+    mean_ssd = values.mean()
 
-plt.title("L1B grid versus L1C grid")
-plt.xlabel("Longitude [deg]")
-plt.ylabel("Latitude [deg]")
+    #Figure 2
+    plt.figure(figsize=(10, 6))
+    plt.plot(indices, values, label="SSD", linewidth=1.5)
+    plt.axhline(mean_ssd, color="red", linestyle="--", label=f"Mean = {mean_ssd:.2f} m")
+    plt.title(f"Spatial Sampling Distance — central L1B row (ALT {row})")
+    plt.xlabel("ACT pixel pair (starting index) [-]")
+    plt.ylabel("SSD [m]")
+    plt.grid(alpha=0.3)
+    plt.legend()
+    plt.ticklabel_format(axis="y", style="plain", useOffset=False)
+    save_plot("l1b_ssd_central_row.png")
 
-plt.grid(True, alpha=0.4)
-plt.legend()
-plt.tight_layout()
-plt.show()
+    #Figure 3
+    plt.figure(figsize=(10, 6))
+    plt.plot(lat_mid[valid], values, marker=".", markersize=3, linewidth=1)
+    plt.title(f"Spatial Sampling Distance versus latitude — L1B ALT {row}")
+    plt.xlabel("Latitude [deg]")
+    plt.ylabel("SSD [m]")
+    plt.grid(alpha=0.3)
+    plt.ticklabel_format(axis="y", style="plain", useOffset=False)
+    save_plot("l1b_ssd_vs_latitude.png")
 
-
-# ============================================================
-# 2. SPATIAL SAMPLING DISTANCE - CENTRAL L1B ROW
-# ============================================================
-
-# Seleccionar fila ALT central
-central_row = lat_l1b.shape[0] // 2
-
-lat_row = lat_l1b[central_row, :]
-lon_row = lon_l1b[central_row, :]
-
-# Distancias entre píxeles ACT consecutivos
-ssd = np.zeros(len(lat_row) - 1)
-
-for ii in range(len(lat_row) - 1):
-
-    point1 = (lat_row[ii], lon_row[ii])
-    point2 = (lat_row[ii + 1], lon_row[ii + 1])
-
-    # Distancia sobre la superficie terrestre
-    ssd[ii] = great_circle(
-        point1,
-        point2
-    ).meters
-
-
-# Eje ACT
-act_pixel = np.arange(len(ssd))
-
-# Media del Spatial Sampling Distance
-mean_ssd = np.mean(ssd)
-
-
-# ============================================================
-# PLOT SPATIAL SAMPLING DISTANCE
-# ============================================================
-
-plt.figure(figsize=(10, 6))
-
-# Spatial Sampling Distance
-plt.plot(
-    act_pixel,
-    ssd,
-    linewidth=1.5,
-    label="SSD"
-)
-
-# Media
-plt.axhline(
-    y=mean_ssd,
-    color="red",
-    linestyle="--",
-    linewidth=1.5,
-    label=f"Mean SSD = {mean_ssd:.2f} m"
-)
-
-plt.title(
-    f"Spatial Sampling Distance - L1B central row (ALT = {central_row})"
-)
-
-plt.xlabel("ACT pixel [-]")
-plt.ylabel("Spatial Sampling Distance [m]")
-
-plt.grid(True, alpha=0.4)
-plt.legend()
-plt.tight_layout()
-plt.show()
+    print(f"Central L1B ALT row: {row}")
+    print(f"SSD minimum: {values.min():.3f} m")
+    print(f"SSD maximum: {values.max():.3f} m")
+    print(f"SSD mean:    {mean_ssd:.3f} m")
+    print(f"Figures saved in: {RESULTS}")
 
 
-# ============================================================
-# RESULTADOS EN TERMINAL
-# ============================================================
-
-print("\nSpatial Sampling Distance")
-print("-------------------------")
-print("Central ALT row:", central_row)
-print("Mean SSD:", mean_ssd, "m")
-print("Minimum SSD:", np.min(ssd), "m")
-print("Maximum SSD:", np.max(ssd), "m")
+if __name__ == "__main__":
+    main()

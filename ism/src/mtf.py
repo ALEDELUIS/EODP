@@ -44,34 +44,34 @@ class mtf:
 
         self.logger.info("Calculation of the System MTF")
 
-        # Calculate the 2D relative frequencies
+        #Calculate the 2D relative frequencies
         self.logger.debug("Calculation of 2D relative frequencies")
         fn2D, fr2D, fnAct, fnAlt = self.freq2d(nlines, ncolumns, D, lambd, focal, pix_size)
 
-        # Diffraction MTF
+        #Diffraction MTF
         self.logger.debug("Calculation of the diffraction MTF")
         Hdiff = self.mtfDiffract(fr2D)
 
-        # Defocus
+        #Defocus
         Hdefoc = self.mtfDefocus(fr2D, defocus, focal, D)
 
-        # WFE Aberrations
+        #WFE Aberrations
         Hwfe = self.mtfWfeAberrations(fr2D, lambd, kLF, wLF, kHF, wHF)
 
-        # Detector
+        #Detector
         Hdet  = self. mtfDetector(fn2D)
 
-        # Smearing MTF
+        #Smearing MTF
         Hsmear = self.mtfSmearing(fnAlt, ncolumns, ksmear)
 
-        # Motion blur MTF
+        #Motion blur MTF
         Hmotion = self.mtfMotion(fn2D, kmotion)
 
-        # Calculate the System MTF
+        #Calculate the System MTF
         self.logger.debug("Calculation of the Sysmtem MTF by multiplying the different contributors")
         Hsys = Hdiff * Hwfe * Hdefoc * Hdet * Hsmear * Hmotion
 
-        # Plot cuts ACT/ALT of the MTF
+        #Plot cuts ACT/ALT of the MTF
         self.plotMtf(Hdiff, Hdefoc, Hwfe, Hdet, Hsmear, Hmotion, Hsys, nlines, ncolumns, fnAct, fnAlt, directory, band)
 
 
@@ -181,7 +181,7 @@ class mtf:
         #TODO
         HsmearAlt = np.sinc(ksmear * fnAlt)
 
-        # Repetir en ACT para obtener una matriz 2D
+        #Repetir en ACT para obtener una matriz 2D
         Hsmear = repmat(
             HsmearAlt.reshape(-1, 1),
             1,
@@ -224,13 +224,43 @@ class mtf:
         ialt = nlines // 2
         iact = ncolumns // 2
 
+
         # We only plot positive frequencies, as in the ATBD
         maskAct = fnAct >= 0
         maskAlt = fnAlt >= 0
 
-        # ---------------------------------------------------------
-        # ACT cut
-        # ---------------------------------------------------------
+        idx_act = np.where(fnAct >= 0)[0][-1]
+        idx_alt = np.where(fnAlt >= 0)[0][-1]
+
+        mtf_components = {
+            "Diffraction": Hdiff,
+            "Defocus": Hdefoc,
+            "WFE Aberrations": Hwfe,
+            "Detector": Hdet,
+            "Smearing": Hsmear,
+            "Motion Blur": Hmotion
+        }
+        print(f"\nMTF results near Nyquist — {band}")
+        for direction, row, col, frequency in [
+            ("ACT", ialt, idx_act, fnAct[idx_act]),
+            ("ALT", idx_alt, iact, fnAlt[idx_alt])
+        ]:
+            # Obtain the six individual MTF values at this frequency.
+            values = {
+                name: float(data[row, col])
+                for name, data in mtf_components.items()
+            }
+
+            # The lowest MTF produces the greatest attenuation.
+            dominant = min(values, key=values.get)
+
+            print(
+                f"{band:<8} {direction:<5} "
+                f"f={frequency:.6f}  "
+                f"System MTF={Hsys[row, col]:.6f}  "
+                f"Dominant={dominant:<17} "
+                f"Value={values[dominant]:.6f}"
+            )
 
         plt.figure(figsize=(10, 6))
 
@@ -284,10 +314,6 @@ class mtf:
 
         plt.close()
 
-        # ---------------------------------------------------------
-        # ALT cut
-        # ---------------------------------------------------------
-
         plt.figure(figsize=(10, 6))
 
         plt.plot(fnAlt[maskAlt], Hdiff[maskAlt, iact],
@@ -339,10 +365,7 @@ class mtf:
 
         plt.close()
 
-        # ---------------------------------------------------------
-        # 2D System MTF
-        # ---------------------------------------------------------
-
+        #2D System MTF
         plotMat2D(
             Hsys,
             "System MTF for " + band,
