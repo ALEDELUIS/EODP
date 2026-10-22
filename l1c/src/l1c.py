@@ -7,9 +7,8 @@ from common.io.readGeodetic import readGeodetic, getCorners
 import mgrs
 import numpy as np
 from scipy.interpolate import bisplrep, bisplev
-import matplotlib.pyplot as plt
 from common.io.l1cProduct import writeL1c
-from matplotlib import cm
+import gc
 
 class l1c(initL1c):
 
@@ -21,27 +20,48 @@ class l1c(initL1c):
         self.logger.info("Start of the L1C Processing Module")
 
         for band in self.globalConfig.bands:
-
             self.logger.info("Start of BAND " + band)
 
-            # Read TOA - output of the L1B in Radiances
-            # -------------------------------------------------------------------------------
-            toa = readToa(self.l1bdir, self.globalConfig.l1b_toa + band + '.nc')
-            lat,lon = readGeodetic(self.gmdir, self.globalConfig.gm_geoloc)
-            self.checkSize(lat,toa)
+            toa = readToa(
+                self.l1bdir,
+                self.globalConfig.l1b_toa + band + '.nc'
+            )
 
-            # L1C reprojection onto the MGRS grid
-            # -------------------------------------------------------------------------------
-            lat_l1c, lon_l1c, toa_l1c = self.l1cProjtoa(lat, lon, toa, band)
+            lat, lon = readGeodetic(
+                self.gmdir,
+                self.globalConfig.gm_geoloc
+            )
 
-            # Write output TOA
-            # -------------------------------------------------------------------------------
-            writeL1c(self.outdir, self.globalConfig.l1c_toa + band, lat_l1c, lon_l1c, toa_l1c)
+            self.checkSize(lat, toa)
+
+            lat_l1c, lon_l1c, toa_l1c = self.l1cProjtoa(
+                lat,
+                lon,
+                toa,
+                band
+            )
+
+            writeL1c(
+                self.outdir,
+                self.globalConfig.l1c_toa + band,
+                lat_l1c,
+                lon_l1c,
+                toa_l1c
+            )
 
             self.logger.info("End of BAND " + band)
 
-        self.logger.info("End of the L1C Module!")
+            # Liberar memoria antes de procesar la siguiente banda
+            del toa
+            del lat
+            del lon
+            del lat_l1c
+            del lon_l1c
+            del toa_l1c
 
+            gc.collect()
+
+        self.logger.info("End of the L1C Module!")
 
     def l1cProjtoa(self, lat, lon, toa, band):
         '''
