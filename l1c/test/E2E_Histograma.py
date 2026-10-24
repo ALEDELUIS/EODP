@@ -1,11 +1,19 @@
+# HISTOGRAMS OF L1B TOA - ONE HISTOGRAM PER BAND
+
 from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
 from netCDF4 import Dataset
 
-#RUTA
-input_dir = Path(r"C:\Users\ALEJANDRA\Desktop\EODP-TS-E2E\myoutput_l1b")
+
+# ============================================================
+# RUTA
+# ============================================================
+
+input_dir = Path(
+    r"C:\Users\ALEJANDRA\Desktop\EODP-TS-E2E\myoutput_l1b"
+)
 
 bands = [
     "VNIR-0",
@@ -15,7 +23,9 @@ bands = [
 ]
 
 
-#HISTOGRAMAS
+# ============================================================
+# HISTOGRAMAS
+# ============================================================
 
 for band in bands:
 
@@ -32,20 +42,38 @@ for band in bands:
     # Eliminar posibles NaN
     toa = toa[np.isfinite(toa)]
 
-    # Crear histograma
-    plt.figure(figsize=(10, 6))
-
-    plt.hist(
+    # Calcular histograma
+    frequency, bin_edges = np.histogram(
         toa,
-        bins=100,
-        edgecolor="black"
+        bins=1000
     )
 
-    plt.title(f"Histogram of L1B TOA - {band}")
-    plt.xlabel("TOA")
-    plt.ylabel("Number of pixels")
+    # Centro de cada bin
+    bin_centers = (
+        bin_edges[:-1] + bin_edges[1:]
+    ) / 2
 
-    plt.grid(True, alpha=0.3)
+    # Crear figura
+    plt.figure(figsize=(10, 6))
+
+    plt.plot(
+        bin_centers,
+        frequency,
+        linewidth=1
+    )
+
+    plt.title(f"L1B TOA Histogram - {band}")
+    plt.xlabel("Pixel value")
+    plt.ylabel("Frequency")
+
+    plt.grid(True, alpha=0.4)
     plt.tight_layout()
 
     plt.show()
+
+    # Información en terminal
+    print(
+        band,
+        "- Maximum frequency:",
+        np.max(frequency)
+    )
